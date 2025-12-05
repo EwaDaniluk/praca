@@ -1,0 +1,152 @@
+import os
+from pathlib import Path
+
+import numpy as np
+from natsort import natsorted  # jeśli potrzeba: pip install natsort
+
+
+def load_coords_from_xyz(xyz_path: Path, nbeads: int = 100) -> np.ndarray:
+    """
+    Wczytuje współrzędne z pliku .xyz wygenerowanego przez KnotPlot:
+    - 1. linia: nagłówek typu "Component 1 of 1:"
+    - kolejne nbeads linii: "x y z"
+    Zwraca tablicę (nbeads, 3).
+    """
+    data = np.loadtxt(xyz_path, skiprows=1)
+    if data.shape != (nbeads, 3):
+        raise ValueError(
+            f"{xyz_path} ma kształt {data.shape}, a oczekiwano ({nbeads}, 3)."
+        )
+    return data
+
+
+def compute_tangents(coords: np.ndarray) -> np.ndarray:
+    """
+    Oblicza wektory styczne dla łańcucha zamkniętego:
+    T_i = znormalizowany wektor od beada i do beada (i+1) mod N.
+    """
+    n = coords.shape[0]
+    segs = coords[(np.arange(n) + 1) % n] - coords
+    norms = np.linalg.norm(segs, axis=1, keepdims=True)
+    norms[norms == 0.0] = 1.0  # zabezpieczenie przed dzieleniem przez 0
+    tangents = segs / norms
+    return tangents
+
+
+def compute_sts_matrix(coords: np.ndarray) -> np.ndarray:
+    """
+    Dyskretna wersja StS writhe (Eq. (1) z artykułu):
+
+        ω_StS(i,j) = ( t_i × t_j ) · ( r_i − r_j ) / |r_i − r_j|^3
+
+    gdzie:
+        r_i – pozycja beada i,
+        t_i – wektor styczny w i.
+
+    Zwraca macierz (N, N).
+    """
+    n = coords.shape[0]
+    r = coords
+    t = compute_tangents(coords)
+
+    # Broadcasting: r_i - r_j
+    r_i = r[:, None, :]    # (N, 1, 3)
+    r_j = r[None, :, :]    # (1, N, 3)
+    diff = r_i - r_j       # (N, N, 3)
+    dist = np.linalg.norm(diff, axis=2)  # (N, N)
+    dist3 = dist ** 3
+
+    # t_i × t_j
+    t_i = t[:, None, :]    # (N, 1, 3)
+    t_j = t[None, :, :]    # (1, N, 3)
+    cross = np.cross(t_i, t_j)  # (N, N, 3)
+
+    # licznik: (t_i × t_j) · (r_i − r_j)
+    numer = np.einsum("ijk,ijk->ij", cross, diff)  # (N, N)
+
+    # dzielenie przez |r_i - r_j|^3 z ochroną dla i=j
+    with np.errstate(divide="ignore", invalid="ignore"):
+        sts = np.where(dist3 > 0.0, numer / dist3, 0.0)
+
+    # wkład własny segmentu z samym sobą ustawiamy na 0
+    np.fill_diagonal(sts, 0.0)
+
+    return sts
+
+
+def build_2DSIGWRITHE_for_knot(
+    knot_name: str,
+    input_dir: str,
+    output_file: str,
+    nbeads: int = 100,
+) -> None:
+    """
+    Dla wszystkich plików {knot_name}_*.xyz w katalogu input_dir:
+
+    1. Wczytuje coords (nbeads, 3).
+    2. Liczy macierz StS writhe (nbeads, nbeads).
+    3. Zapisuje ją do output_file w formacie 2DSIGWRITHE:
+
+       - brak nagłówka,
+       - dla każdej konformacji blok nbeads wierszy,
+       - każdy wiersz ma nbeads wartości float (ω_StS(i,1..N)),
+       - konformacje jedna po drugiej, bez pustych linii.
+    """
+    input_path = Path(input_dir)
+    if not input_path.is_dir():
+        raise FileNotFoundError(f"Katalog wejściowy nie istnieje: {input_dir}")
+
+    xyz_files = [p for p in input_path.glob(f"{knot_name}_*.xyz") if p.is_file()]
+    if not xyz_files:
+        raise FileNotFoundError(f"Nie znaleziono plików {knot_name}_*.xyz w {input_dir}")
+
+    # 0_1_001, 0_1_002, ..., 0_1_200
+    xyz_files = natsorted(xyz_files)
+    print(f"Znalazłem {len(xyz_files)} plików dla węzła {knot_name}")
+
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with output_path.open("w", encoding="utf-8") as out_f:
+        total_confs = 0
+
+        for idx, xyz_file in enumerate(xyz_files, start=1):
+            coords = load_coords_from_xyz(xyz_file, nbeads=nbeads)
+            sts = compute_sts_matrix(coords)  # (N, N)
+
+            if sts.shape != (nbeads, nbeads):
+                raise ValueError(
+                    f"Macierz StS dla {xyz_file} ma kształt {sts.shape}, "
+                    f"a oczekiwano ({nbeads}, {nbeads})"
+                )
+
+            # Zapisujemy wiersz po wierszu, bez nagłówka
+            for i in range(nbeads):
+                row = sts[i, :]
+                out_f.write(" ".join(f"{v:.10e}" for v in row) + "\n")
+
+            total_confs += 1
+            if idx % 10 == 0:
+                print(f"Przetworzono {idx} plików...")
+
+    print(f"Zapisano {total_confs} konformacji do pliku: {output_path}")
+
+
+if __name__ == "__main__":
+    knot_name = "5_2"
+
+    # katalog z Twoimi plikami z KnotPlot
+    input_dir = r"C:\Users\danil\KnotPlot\5_2_200"
+
+    # docelowy plik – dopasuj nazwę/ścieżkę do tego, czego oczekuje datafile_structure()
+    # przykładowo:
+    output_file = (
+        r"C:\Users\danil\.vscode\praca\MASTER\3_1\N100\lp10\SIGWRITHEMATRIX\3DSignedWritheMatrix_3_1.dat.lp10.dat"
+    )
+
+    build_2DSIGWRITHE_for_knot(
+        knot_name=knot_name,
+        input_dir=input_dir,
+        output_file=output_file,
+        nbeads=100,
+    )

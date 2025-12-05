@@ -1,0 +1,81 @@
+import os
+from pathlib import Path
+from natsort import natsorted  # jeśli nie masz: pip install natsort
+
+def build_xyz_dataset_for_knot(
+    knot_name: str,
+    input_dir: str,
+    output_file: str,
+    nbeads: int = 100,
+) -> None:
+    """
+    Wczytuje wszystkie pliki *.xyz z katalogu input_dir (np. 0_1_001.xyz, 0_1_002.xyz, ...)
+    i zapisuje je w jednym pliku output_file w formacie wymaganym przez eksperyment:
+    - bez nagłówka ("Component 1 of 1:")
+    - dla każdej konformacji dokładnie nbeads linii "x y z"
+    - konformacje jedna po drugiej, bez pustych linii.
+    """
+    input_path = Path(input_dir)
+
+    if not input_path.is_dir():
+        raise FileNotFoundError(f"Katalog wejściowy nie istnieje: {input_dir}")
+
+    # Wszystkie pliki knot_name_*.xyz (np. 0_1_001.xyz, 0_1_002.xyz, ...)
+    xyz_files = [p for p in input_path.glob(f"{knot_name}_*.xyz") if p.is_file()]
+    if not xyz_files:
+        raise FileNotFoundError(f"Nie znaleziono plików {knot_name}_*.xyz w {input_dir}")
+
+    # Sortowanie naturalne: 0_1_001, 0_1_002, ..., 0_1_200
+    xyz_files = natsorted(xyz_files)
+
+    print(f"Znalazłem {len(xyz_files)} plików dla węzła {knot_name}")
+
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with output_path.open("w", encoding="utf-8") as out_f:
+        total_confs = 0
+
+        for file_idx, xyz_file in enumerate(xyz_files, start=1):
+            with xyz_file.open("r", encoding="utf-8", errors="replace") as f:
+                # Pomijamy pierwszą linię: "Component 1 of 1:"
+                header = f.readline()
+
+                # Wczytujemy wszystkie linie z współrzędnymi, pomijając puste
+                coords = [line.strip() for line in f if line.strip()]
+
+            if len(coords) != nbeads:
+                raise ValueError(
+                    f"Plik {xyz_file} ma {len(coords)} linii z współrzędnymi, "
+                    f"a oczekiwano {nbeads}."
+                )
+
+            # Zapisujemy do pliku wyjściowego
+            for line in coords:
+                out_f.write(line + "\n")
+
+            total_confs += 1
+            if file_idx % 10 == 0:
+                print(f"Przetworzono {file_idx} plików...")
+
+    print(f"Zapisano {total_confs} konformacji do pliku: {output_path}")
+
+
+if __name__ == "__main__":
+    # PRZYKŁAD UŻYCIA DLA 0_1:
+    knot_name = "0_1"
+
+    # Twój katalog z pojedynczymi konformacjami z KnotPlot
+    input_dir = r"C:\Users\danil\KnotPlot\0_1_200"
+
+    # Docelowy plik w strukturze repozytorium ML (dopasuj do swojej ścieżki MASTER)
+    output_file = (
+        r"C:\Users\danil\.vscode\praca\MASTER\0_1\N100\lp10\XYZ\XYZ_0_1.dat.nos"
+    )
+
+    build_xyz_dataset_for_knot(
+        knot_name=knot_name,
+        input_dir=input_dir,
+        output_file=output_file,
+        nbeads=100,  # bo w pliku jest nagłówek + 100 punktów
+    )

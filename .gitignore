@@ -1,0 +1,32 @@
+# Ignore training data directory
+MASTER/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+env/
+venv/
+ENV/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VSCode
+.vscode/
+
+# macOS
+.DS_Store
+
+# Pytest
+.pytest_cache/
+
+# TensorFlow / Keras checkpoints and saved models
+*.ckpt
+*.h5
+checkpoint
+
+# Large variable folders
+variables/
